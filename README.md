@@ -6,8 +6,6 @@
 
 ![Screenshot](screenshot.png)
 
-*(建议运行程序后将截图命名为 `screenshot.png` 放在仓库根目录，README 将自动展示)*
-
 ---
 
 ## 📂 文件结构
