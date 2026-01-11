@@ -11,7 +11,7 @@
 ## 📂 文件结构
 
 - `agent.py`：智能体类，包含物理更新、碰撞检测、RL 状态获取
-- `road.py`：道路环境绘制、静态障碍 Mask 生成
+- `intersection.py`：道路环境绘制、静态障碍 Mask 生成
 - `sensor.py`：激光雷达逻辑
 - `config.py`：全局参数配置（物理、RL 维度）
 - `utils.py`：数学工具函数
