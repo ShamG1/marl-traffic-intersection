@@ -1,5 +1,5 @@
-# --- manual_test.py ---
-# Manual control test using IntersectionEnv
+# --- traffic_flow_test.py ---
+# Test script for traffic flow with lane ID rendering
 
 import pygame
 import numpy as np
@@ -7,16 +7,16 @@ from env import IntersectionEnv
 from config import DEFAULT_REWARD_CONFIG, FPS, SCALE
 
 def main():
-    """Manual control test with IntersectionEnv."""
+    """Test traffic flow with manual control."""
     
-    # Initialize environment
+    # Initialize environment with traffic flow
     config = {
-        'traffic_flow': False,  # No traffic flow for manual test
-        'num_agents': 1,  # Single agent
+        'traffic_flow': True,  # Single agent with traffic flow
+        'traffic_density': 5,  # Moderate traffic density
         'render_mode': 'human',
         'max_steps': 2000,
         'reward_config': DEFAULT_REWARD_CONFIG['reward_config'],
-        'ego_routes': [('IN_5', 'OUT_7')]  # South to West left turn
+        'ego_routes': [('IN_6', 'OUT_2')]  # South to North straight
     }
     
     env = IntersectionEnv(config)
@@ -25,13 +25,16 @@ def main():
     obs, info = env.reset()
     
     print("=" * 60)
-    print("Manual Control Test")
+    print("Traffic Flow Test")
     print("=" * 60)
     print("Controls:")
     print("  UP/DOWN arrows: Throttle")
     print("  LEFT/RIGHT arrows: Steering")
     print("  R: Reset environment")
     print("  ESC/Q: Quit")
+    print("=" * 60)
+    print(f"Traffic density: {config['traffic_density']}")
+    print(f"Traffic flow enabled: {env.traffic_flow}")
     print("=" * 60)
     
     total_reward = 0.0
@@ -57,7 +60,7 @@ def main():
         steer = 0.0
         
         if keys[pygame.K_UP]:
-            throttle = 0.3
+            throttle = 0.5
         if keys[pygame.K_DOWN]:
             throttle = -0.5
         if keys[pygame.K_LEFT]:
@@ -69,9 +72,6 @@ def main():
         
         # Step environment
         obs, reward, terminated, truncated, info = env.step(action)
-        # Handle both single agent (scalar) and multi-agent (list) reward formats
-        if isinstance(reward, (list, np.ndarray)) and len(reward) > 0:
-            reward = reward[0]  # Take first agent's reward
         total_reward += reward
         done = terminated or truncated
         
@@ -81,7 +81,7 @@ def main():
             obs, info = env.reset()
             total_reward = 0.0
         
-        # Custom rendering with lane IDs and lidar
+        # Custom rendering with lane IDs (no lidar)
         if env.render_mode == 'human' and env.pygame_initialized:
             # Handle events
             for event in pygame.event.get():
@@ -94,15 +94,15 @@ def main():
             # Draw road with lane IDs
             env.road.draw(env.screen, show_lane_ids=True)
             
-            # Draw agents
+            # Draw traffic NPCs
+            if env.traffic_flow:
+                env.traffic_cars.draw(env.screen)
+            
+            # Draw agents (ego vehicle) with lidar
             for agent in env.agents:
                 if agent.alive():
-                    # Debug: draw a red circle at agent position
-                    pygame.draw.circle(env.screen, (255, 0, 0), 
-                                     (int(agent.pos_x), int(agent.pos_y)), 10)
-                    # Draw the car
                     env.screen.blit(agent.image, agent.rect)
-                    # Draw lidar
+                    # Draw lidar only for ego vehicle (not for NPCs)
                     agent.lidar.draw(env.screen)
             
             # === Visualization of navigation path ===
@@ -128,6 +128,10 @@ def main():
                 speed_ms = (env.agents[0].speed * FPS) / SCALE
                 status_text += f" | Speed: {speed_ms:.1f} m/s"
             
+            # Traffic info
+            if env.traffic_flow:
+                status_text += f" | Traffic: {len(env.traffic_cars)}"
+            
             # Check collision status
             collision_info = info.get('collisions', {})
             if collision_info:
@@ -145,7 +149,7 @@ def main():
             env.screen.blit(txt, (10, 10))
             
             # Hint text
-            hint_text = "Path is Cyan. Target is Yellow."
+            hint_text = "Traffic Flow Test - Path: Cyan, Target: Yellow"
             hint_surf = env.font.render(hint_text, True, (255, 255, 255))
             env.screen.blit(hint_surf, (10, 40))
             
@@ -162,3 +166,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

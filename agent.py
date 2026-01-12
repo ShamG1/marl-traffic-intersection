@@ -39,7 +39,7 @@ class Car(pygame.sprite.Sprite):
     def __init__(self, start_id, end_id, speed_factor=1.0):
         super().__init__()
         
-        # 1. Visual Properties
+        # 1. Visual properties
         self.length = CAR_LENGTH
         self.width = CAR_WIDTH
         self.color = random.choice(COLOR_CAR_LIST)
@@ -50,7 +50,7 @@ class Car(pygame.sprite.Sprite):
         # Windshield
         pygame.draw.rect(self.image_orig, (200,200,200), (self.length*0.7, 2, self.length*0.25, self.width-4))
         
-        # 2. Physics State (Kinematics)
+        # 2. Physics state (kinematics)
         start_pos = POINTS[start_id]
         self.pos_x = float(start_pos[0])
         self.pos_y = float(start_pos[1])
@@ -59,7 +59,7 @@ class Car(pygame.sprite.Sprite):
         self.acc = 0.0        # Acceleration
         self.steering = 0.0   # Steering angle
         
-        # 3. Navigation & Path
+        # 3. Navigation & path
         self.intention = self._determine_intention(start_id, end_id)
         self.path = self._generate_path(start_id, end_id)
         self.path_index = 0   # Closest index on the path
@@ -73,7 +73,7 @@ class Car(pygame.sprite.Sprite):
         else:
             self.heading = 0.0
 
-        # 4. Sprite Initialization
+        # 4. Sprite initialization
         self.image = self.image_orig
         self.rect = self.image.get_rect(center=(int(self.pos_x), int(self.pos_y)))
         self.mask = pygame.mask.from_surface(self.image)
@@ -91,23 +91,23 @@ class Car(pygame.sprite.Sprite):
         else:
             throttle, steer_input = action
 
-        # --- 1. Map Inputs ---
+        # --- 1. Map inputs ---
         self.acc = throttle * MAX_ACC
         
         # Steering smoothing
         target_steering = steer_input * MAX_STEERING_ANGLE
         self.steering += (target_steering - self.steering) * 0.2
         
-        # Friction/Drag
+        # Friction/drag
         if throttle == 0: 
             self.speed *= 0.95
 
-        # --- 2. Kinematic Updates ---
-        # Update Speed
+        # --- 2. Kinematic updates ---
+        # Update speed
         self.speed += self.acc * DT
         self.speed = np.clip(self.speed, -PHYSICS_MAX_SPEED/2, PHYSICS_MAX_SPEED)
 
-        # Update Heading (Bicycle Model)
+        # Update heading (bicycle model)
         # angular_velocity = (v / L) * tan(delta)
         if abs(self.speed) > 0.1:
             ang_vel = (self.speed / WHEELBASE) * math.tan(self.steering)
@@ -115,12 +115,12 @@ class Car(pygame.sprite.Sprite):
         
         self.heading = wrap_angle_rad(self.heading)
 
-        # Update Position
+        # Update position
         # Screen Y is inverted (Down is +), so dy needs subtraction for standard math
         self.pos_x += self.speed * math.cos(self.heading)
         self.pos_y -= self.speed * math.sin(self.heading)
 
-        # --- 3. Visual Update ---
+        # --- 3. Visual update ---
         self.rect.center = (int(self.pos_x), int(self.pos_y))
         
         # Rotate image (Pygame rotates CCW)
@@ -129,7 +129,7 @@ class Car(pygame.sprite.Sprite):
         self.rect = self.image.get_rect(center=self.rect.center)
         self.mask = pygame.mask.from_surface(self.image)
 
-        # --- 4. Navigation Update ---
+        # --- 4. Navigation update ---
         # Find nearest point on path
         self._update_path_index()
 
@@ -158,7 +158,7 @@ class Car(pygame.sprite.Sprite):
         """
         w, h = road_mask.get_size()
         
-        # --- 1. Success Check ---
+        # --- 1. Success check ---
         end_pt = self.path[-1]
         prev_pt = self.path[-2]
         dx_road = end_pt[0] - prev_pt[0]
@@ -169,13 +169,13 @@ class Car(pygame.sprite.Sprite):
         is_success = False
         
         if abs(dx_road) > abs(dy_road): 
-            # Horizontal Road
+            # Horizontal road
             lat_error = abs(self.pos_y - self.end_y)
             long_error = abs(self.pos_x - self.end_x)
             if lat_error < LATERAL_TOLERANCE and long_error < LONGITUDINAL_TOLERANCE:
                 is_success = True
         else:
-            # Vertical Road
+            # Vertical road
             lat_error = abs(self.pos_x - self.end_x)
             long_error = abs(self.pos_y - self.end_y)
             if lat_error < LATERAL_TOLERANCE and long_error < LONGITUDINAL_TOLERANCE:
@@ -187,7 +187,7 @@ class Car(pygame.sprite.Sprite):
         # Get car corners for checking
         corners = self.get_corners()
         
-        # --- 2. Wall / Off-road Check ---
+        # --- 2. Wall / off-road check ---
         for x, y in corners:
             ix, iy = int(x), int(y)
             if ix < 0 or ix >= w or iy < 0 or iy >= h:
@@ -195,7 +195,7 @@ class Car(pygame.sprite.Sprite):
             if road_mask.get_at((ix, iy)):
                 return True, "CRASH_WALL"
         
-        # --- 3. Yellow Line Check (New) ---
+        # --- 3. Yellow line check ---
         # Check if any corner touches the yellow line mask
         if line_mask is not None:
             for x, y in corners:
@@ -205,7 +205,7 @@ class Car(pygame.sprite.Sprite):
                     if line_mask.get_at((ix, iy)):
                         return True, "CRASH_LINE"
 
-        # --- 4. Vehicle-to-Vehicle Check ---
+        # --- 4. Vehicle-to-vehicle check ---
         for other in all_vehicles:
             if other is self: continue
             if self.rect.colliderect(other.rect):
@@ -340,3 +340,52 @@ class Car(pygame.sprite.Sprite):
             path.append((exit_p[0]+(p_end[0]-exit_p[0])*t, exit_p[1]+(p_end[1]-exit_p[1])*t))
             
         return path
+
+    # === (PID + ACC) ===
+    def plan_autonomous_action(self, road_mask, all_vehicles):
+
+        # 1. Lateral control - PID
+        lookahead = 12 
+        target_idx = min(int(self.path_index) + lookahead, len(self.path) - 1)
+        tx, ty = self.path[target_idx]
+        
+        dx = tx - self.pos_x
+        dy = ty - self.pos_y
+        target_heading = math.atan2(-dy, dx)
+        
+        # Angle error (-pi ~ pi)
+        heading_error = wrap_angle_rad(target_heading - self.heading)
+        
+        # P controller
+        steer_cmd = np.clip(heading_error * 3.0, -1.0, 1.0)
+        
+        # 2. Longitudinal control - ACC
+        lidar_data = self.lidar.readings
+        
+        mid_idx = LIDAR_RAYS // 2
+        front_indices = range(mid_idx - 4, mid_idx + 5)
+        
+        min_front_dist = float('inf')
+        for i in front_indices:
+            if 0 <= i < LIDAR_RAYS:
+                min_front_dist = min(min_front_dist, lidar_data[i])
+        
+        # ACC logic
+        SAFE_DIST = 40.0 
+        STOP_DIST = 15.0  
+        TARGET_SPEED = PHYSICS_MAX_SPEED * 0.5 
+        
+        throttle_cmd = 0.0
+        
+        if min_front_dist < SAFE_DIST:
+            ratio = (min_front_dist - STOP_DIST) / (SAFE_DIST - STOP_DIST)
+            throttle_cmd = -1.0 + ratio # -1.0 ~ 0.0
+        else:
+            if self.speed < TARGET_SPEED:
+                throttle_cmd = 0.5 # Accelerate
+            elif self.speed > TARGET_SPEED + 1.0:
+                throttle_cmd = -0.1 # Slight deceleration
+            else:
+                throttle_cmd = 0.0 # Coasting/adjustment
+        
+        return [throttle_cmd, steer_cmd]
