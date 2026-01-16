@@ -1,40 +1,58 @@
-# --- traffic_flow_test.py ---
-# Test script for traffic flow with lane ID rendering
+# --- manual_test.py ---
+# Manual control test using IntersectionEnv
 
 import pygame
 import numpy as np
-from env import IntersectionEnv
-from config import DEFAULT_REWARD_CONFIG, FPS, SCALE
+import random
+import sys
+import os
+
+# Handle imports for both script execution and module import
+try:
+    # Try relative import (when used as a module)
+    from .env import IntersectionEnv
+    from .config import DEFAULT_REWARD_CONFIG, FPS, SCALE
+except ImportError:
+    # Fall back to absolute import (when run as a script)
+    # Add parent directory to path for script execution
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from env import IntersectionEnv
+    from config import DEFAULT_REWARD_CONFIG, FPS, SCALE
+
 
 def main():
-    """Test traffic flow with manual control."""
+    """Manual control test with IntersectionEnv."""
     
-    # Initialize environment with traffic flow
+    # Initialize environment (routes will be set dynamically)
     config = {
-        'traffic_flow': True,  # Single agent with traffic flow
-        'traffic_density': 5,  # Moderate traffic density
+        'traffic_flow': False,  # No traffic flow for manual test
+        'num_agents': 1,        # Single agentww
+        'num_lanes': 2,
         'render_mode': 'human',
         'max_steps': 2000,
         'reward_config': DEFAULT_REWARD_CONFIG['reward_config'],
-        'ego_routes': [('IN_6', 'OUT_2')]  # South to North straight
     }
     
     env = IntersectionEnv(config)
-    
-    # Reset environment
+
+    def choose_random_route():
+        if hasattr(env, 'traffic_routes') and len(env.traffic_routes) > 0:
+            return random.choice(env.traffic_routes)
+        # Fallback to default route if mapping is empty
+        return ('IN_5', 'OUT_7')
+
+    # Set initial random route and reset
+    env.ego_routes = [choose_random_route()]
     obs, info = env.reset()
     
     print("=" * 60)
-    print("Traffic Flow Test")
+    print("Manual Control Test")
     print("=" * 60)
     print("Controls:")
     print("  UP/DOWN arrows: Throttle")
     print("  LEFT/RIGHT arrows: Steering")
     print("  R: Reset environment")
     print("  ESC/Q: Quit")
-    print("=" * 60)
-    print(f"Traffic density: {config['traffic_density']}")
-    print(f"Traffic flow enabled: {env.traffic_flow}")
     print("=" * 60)
     
     total_reward = 0.0
@@ -47,10 +65,11 @@ def main():
                 running = False
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_r:
-                    # Reset environment
+                    # Reset environment with a new random route
+                    env.ego_routes = [choose_random_route()]
                     obs, info = env.reset()
                     total_reward = 0.0
-                    print("Environment reset!")
+                    print(f"Environment reset! New route: {env.ego_routes[0]}")
                 elif event.key == pygame.K_ESCAPE or event.key == pygame.K_q:
                     running = False
         
@@ -60,7 +79,7 @@ def main():
         steer = 0.0
         
         if keys[pygame.K_UP]:
-            throttle = 0.5
+            throttle = 0.3
         if keys[pygame.K_DOWN]:
             throttle = -0.5
         if keys[pygame.K_LEFT]:
@@ -72,6 +91,9 @@ def main():
         
         # Step environment
         obs, reward, terminated, truncated, info = env.step(action)
+        # Handle both single agent (scalar) and multi-agent (list) reward formats
+        if isinstance(reward, (list, np.ndarray)) and len(reward) > 0:
+            reward = reward[0]  # Take first agent's reward
         total_reward += reward
         done = terminated or truncated
         
@@ -81,7 +103,7 @@ def main():
             obs, info = env.reset()
             total_reward = 0.0
         
-        # Custom rendering with lane IDs (no lidar)
+        # Custom rendering with lane IDs and lidar
         if env.render_mode == 'human' and env.pygame_initialized:
             # Handle events
             for event in pygame.event.get():
@@ -94,15 +116,15 @@ def main():
             # Draw road with lane IDs
             env.road.draw(env.screen, show_lane_ids=True)
             
-            # Draw traffic NPCs
-            if env.traffic_flow:
-                env.traffic_cars.draw(env.screen)
-            
-            # Draw agents (ego vehicle) with lidar
+            # Draw agents
             for agent in env.agents:
                 if agent.alive():
+                    # Debug: draw a red circle at agent position
+                    pygame.draw.circle(env.screen, (255, 0, 0), 
+                                     (int(agent.pos_x), int(agent.pos_y)), 10)
+                    # Draw the car
                     env.screen.blit(agent.image, agent.rect)
-                    # Draw lidar only for ego vehicle (not for NPCs)
+                    # Draw lidar
                     agent.lidar.draw(env.screen)
             
             # === Visualization of navigation path ===
@@ -128,10 +150,6 @@ def main():
                 speed_ms = (env.agents[0].speed * FPS) / SCALE
                 status_text += f" | Speed: {speed_ms:.1f} m/s"
             
-            # Traffic info
-            if env.traffic_flow:
-                status_text += f" | Traffic: {len(env.traffic_cars)}"
-            
             # Check collision status
             collision_info = info.get('collisions', {})
             if collision_info:
@@ -149,7 +167,7 @@ def main():
             env.screen.blit(txt, (10, 10))
             
             # Hint text
-            hint_text = "Traffic Flow Test - Path: Cyan, Target: Yellow"
+            hint_text = "Path is Cyan. Target is Yellow."
             hint_surf = env.font.render(hint_text, True, (255, 255, 255))
             env.screen.blit(hint_surf, (10, 40))
             
@@ -166,4 +184,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

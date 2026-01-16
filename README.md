@@ -1,6 +1,6 @@
-# MARL 交通十字路口环境 🚦
+# MARL 无信号路口环境 🚦
 
-这是一个基于 **Pygame** 开发的轻量级多智能体强化学习 (MARL) 十字路口仿真环境。
+这是一个基于 **Pygame** 开发的轻量级多智能体强化学习 (MARL) 无信号路口仿真环境。
 
 项目实现了基于 **运动学自行车模型** 的车辆控制、**贝塞尔曲线** 导航、**线束激光雷达** 感知以及符合学术标准的 **RL 观测空间**。
 
@@ -192,7 +192,7 @@ python manual_test.py
 ### 交通流测试
 
 ```bash
-python traffic_flow_test.py
+python traffic_test.py
 ```
 
 - 显示车道ID、主车雷达和导航路径
@@ -206,8 +206,8 @@ python traffic_flow_test.py
 - [x] 集成奖励计算到环境
 - [x] 集成交通流生成到环境
 - [x] 支持单智能体和多智能体模式
-- [ ] 接入 Gym/PettingZoo 接口
-- [ ] 使用 PPO / MADDPG 算法训练
+- [x] 使用 MAPPO 算法训练
+- [ ] 使用 MCTS 算法训练
 
 ---
 

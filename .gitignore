@@ -1,6 +1,37 @@
 # .gitignore
+# Python
 __pycache__/
 *.pyc
-.env
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
 .idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
 .DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+.env.local
+
+# Checkpoints and logs
+*.pth
+*.pt
+*.log
+checkpoints/
+logs/
+
+# Assets (optional - uncomment if you don't want to track assets)
+# assets/

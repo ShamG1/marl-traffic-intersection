@@ -11,10 +11,7 @@ TITLE = "MARL Intersection"
 SCALE = 12                  # 1 meter = 12 pixels
 LANE_WIDTH_M = 3.5          # Lane width 3.5 meters
 LANE_WIDTH_PX = int(LANE_WIDTH_M * SCALE)  # ~42px
-NUM_LANES = 2               # Number of lanes per direction
-ROAD_HALF_WIDTH = NUM_LANES * LANE_WIDTH_PX
 CORNER_RADIUS = int(7 * SCALE) # Corner radius
-TURN_BOUND = ROAD_HALF_WIDTH    # Turn trigger boundary
 
 # === Vehicle appearance ===
 CAR_LENGTH = int(4.5 * SCALE)
@@ -34,6 +31,7 @@ PHYSICS_MAX_SPEED = 8.0
 # === Intentions and actions ===
 ACTION_STRAIGHT = 0
 ACTION_LEFT = 1 
+ACTION_RIGHT = 2
 
 # === RL observation space ===
 NEIGHBOR_COUNT = 8          # K

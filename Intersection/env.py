@@ -7,16 +7,71 @@ import math
 import random
 import os
 from typing import Dict, List, Tuple, Optional, Any
-from config import *
-from agent import Car, POINTS
+# Support both relative and absolute imports
+try:
+    from .config import *
+    from .agent import Car, build_lane_layout
+    from .utils import calculate_heading_rad
+    from .sensor import Lidar
+except ImportError:
+    from config import *
+    from agent import Car, build_lane_layout
+    from utils import calculate_heading_rad
+    from sensor import Lidar
+
+# Default route mapping presets for specific lane counts
+DEFAULT_ROUTE_MAPPING_2LANES = {
+    "IN_1": ["OUT_3"],
+    "IN_2": ["OUT_6"],
+    "IN_3": ["OUT_5"],
+    "IN_4": ["OUT_8"],
+    "IN_6": ["OUT_2"],
+    "IN_7": ["OUT_1"],
+    "IN_8": ["OUT_4"],
+}
+
+DEFAULT_ROUTE_MAPPING_3LANES = {
+    "IN_1": ["OUT_4"],
+    "IN_2": ["OUT_8"],
+    "IN_3": ["OUT_12"],
+    "IN_4": ["OUT_7"],
+    "IN_5": ["OUT_11"],
+    "IN_6": ["OUT_3"],
+    "IN_7": ["OUT_10"],
+    "IN_8": ["OUT_2"],
+    "IN_9": ["OUT_6"],
+    "IN_10": ["OUT_1"],
+    "IN_11": ["OUT_5"],
+    "IN_12": ["OUT_9"],
+}
 
 class Road:
-    def __init__(self):
+    def __init__(self, num_lanes=None, points=None):
+        """
+        Initialize Road.
+        
+        Args:
+            num_lanes: Number of lanes per direction. If None, defaults to 3.
+            points: Dictionary of lane points {lane_id: (x, y)}. If None, builds default (3 lanes).
+        """
+        self.num_lanes = num_lanes if num_lanes is not None else 3
+        if points is not None:
+            self.points = points
+        else:
+            # Build default points for 3 lanes as fallback
+            from .agent import build_lane_layout
+            try:
+                from .agent import build_lane_layout
+            except ImportError:
+                from agent import build_lane_layout
+            default_layout = build_lane_layout(3)
+            self.points = default_layout['points']
         self.width = WIDTH
         self.height = HEIGHT
         self.cx = WIDTH // 2
         self.cy = HEIGHT // 2
-        self.rw = ROAD_HALF_WIDTH
+        # Calculate road half width based on num_lanes
+        self.rw = self.num_lanes * LANE_WIDTH_PX
         self.cr = CORNER_RADIUS
         
         self.font = pygame.font.SysFont("Arial", 16, bold=True)
@@ -98,16 +153,15 @@ class Road:
 
     def _draw_markings(self, screen):
         stop_offset = self.rw + self.cr
-        # Double yellow lines
-        pygame.draw.line(screen, COLOR_YELLOW, (self.cx-2, 0), (self.cx-2, self.cy-stop_offset), 2)
-        pygame.draw.line(screen, COLOR_YELLOW, (self.cx+2, 0), (self.cx+2, self.cy-stop_offset), 2)
-        pygame.draw.line(screen, COLOR_YELLOW, (self.cx-2, self.height), (self.cx-2, self.cy+stop_offset), 2)
-        pygame.draw.line(screen, COLOR_YELLOW, (self.cx+2, self.height), (self.cx+2, self.cy+stop_offset), 2)
-        
-        pygame.draw.line(screen, COLOR_YELLOW, (0, self.cy-2), (self.cx-stop_offset, self.cy-2), 2)
-        pygame.draw.line(screen, COLOR_YELLOW, (0, self.cy+2), (self.cx-stop_offset, self.cy+2), 2)
-        pygame.draw.line(screen, COLOR_YELLOW, (self.width, self.cy-2), (self.cx+stop_offset, self.cy-2), 2)
-        pygame.draw.line(screen, COLOR_YELLOW, (self.width, self.cy+2), (self.cx+stop_offset, self.cy+2), 2)
+        center_gap = 2
+
+        # Double yellow center lines (vertical & horizontal)
+        for dx in (-center_gap, center_gap):
+            pygame.draw.line(screen, COLOR_YELLOW, (self.cx+dx, 0), (self.cx+dx, self.cy-stop_offset), 2)
+            pygame.draw.line(screen, COLOR_YELLOW, (self.cx+dx, self.height), (self.cx+dx, self.cy+stop_offset), 2)
+        for dy in (-center_gap, center_gap):
+            pygame.draw.line(screen, COLOR_YELLOW, (0, self.cy+dy), (self.cx-stop_offset, self.cy+dy), 2)
+            pygame.draw.line(screen, COLOR_YELLOW, (self.width, self.cy+dy), (self.cx+stop_offset, self.cy+dy), 2)
 
         # Stop lines
         stop_w = 4
@@ -116,15 +170,19 @@ class Road:
         pygame.draw.line(screen, COLOR_WHITE, (self.cx-stop_offset, self.cy), (self.cx-stop_offset, self.cy+self.rw), stop_w)
         pygame.draw.line(screen, COLOR_WHITE, (self.cx+stop_offset, self.cy), (self.cx+stop_offset, self.cy-self.rw), stop_w)
 
-        # Dashed lines
-        self._draw_dash(screen, (self.cx - LANE_WIDTH_PX, 0), (self.cx - LANE_WIDTH_PX, self.cy - stop_offset))
-        self._draw_dash(screen, (self.cx + LANE_WIDTH_PX, 0), (self.cx + LANE_WIDTH_PX, self.cy - stop_offset))
-        self._draw_dash(screen, (self.cx - LANE_WIDTH_PX, self.height), (self.cx - LANE_WIDTH_PX, self.cy + stop_offset))
-        self._draw_dash(screen, (self.cx + LANE_WIDTH_PX, self.height), (self.cx + LANE_WIDTH_PX, self.cy + stop_offset))
-        self._draw_dash(screen, (0, self.cy - LANE_WIDTH_PX), (self.cx - stop_offset, self.cy - LANE_WIDTH_PX))
-        self._draw_dash(screen, (0, self.cy + LANE_WIDTH_PX), (self.cx - stop_offset, self.cy + LANE_WIDTH_PX))
-        self._draw_dash(screen, (self.width, self.cy - LANE_WIDTH_PX), (self.cx + stop_offset, self.cy - LANE_WIDTH_PX))
-        self._draw_dash(screen, (self.width, self.cy + LANE_WIDTH_PX), (self.cx + stop_offset, self.cy + LANE_WIDTH_PX))
+        # Dashed lane separators for multi-lane roads (exclude center double yellow)
+        for i in range(1, self.num_lanes):
+            offset = i * LANE_WIDTH_PX
+            # Vertical lanes (top and bottom segments)
+            self._draw_dash(screen, (self.cx - offset, 0), (self.cx - offset, self.cy - stop_offset))
+            self._draw_dash(screen, (self.cx + offset, 0), (self.cx + offset, self.cy - stop_offset))
+            self._draw_dash(screen, (self.cx - offset, self.height), (self.cx - offset, self.cy + stop_offset))
+            self._draw_dash(screen, (self.cx + offset, self.height), (self.cx + offset, self.cy + stop_offset))
+            # Horizontal lanes (left and right segments)
+            self._draw_dash(screen, (0, self.cy - offset), (self.cx - stop_offset, self.cy - offset))
+            self._draw_dash(screen, (0, self.cy + offset), (self.cx - stop_offset, self.cy + offset))
+            self._draw_dash(screen, (self.width, self.cy - offset), (self.cx + stop_offset, self.cy - offset))
+            self._draw_dash(screen, (self.width, self.cy + offset), (self.cx + stop_offset, self.cy + offset))
 
     def _draw_dash(self, screen, start, end):
         x1, y1 = start
@@ -143,30 +201,20 @@ class Road:
             pygame.draw.line(screen, COLOR_WHITE, (sx,sy), (ex,ey), 2)
 
     def _draw_lane_ids(self, screen):
+        """Draw lane IDs at their spawn points."""
         COLOR_IN, COLOR_OUT = (0,0,200), (200,0,0)
-        m = 35
+
         def label(t, x, y, c):
             s = self.font.render(t, True, (255,255,255))
             r = s.get_rect(center=(x,y))
             pygame.draw.rect(screen, c, r.inflate(10,6), border_radius=4)
             screen.blit(s, r)
-        label("IN_1", self.cx - LANE_WIDTH_PX*0.5, m, COLOR_IN)
-        label("IN_2", self.cx - LANE_WIDTH_PX*1.5, m, COLOR_IN)
-        label("IN_3", self.width-m, self.cy - LANE_WIDTH_PX*0.5, COLOR_IN)
-        label("IN_4", self.width-m, self.cy - LANE_WIDTH_PX*1.5, COLOR_IN)
-        label("IN_5", self.cx + LANE_WIDTH_PX*0.5, self.height-m, COLOR_IN)
-        label("IN_6", self.cx + LANE_WIDTH_PX*1.5, self.height-m, COLOR_IN)
-        label("IN_7", m, self.cy + LANE_WIDTH_PX*0.5, COLOR_IN)
-        label("IN_8", m, self.cy + LANE_WIDTH_PX*1.5, COLOR_IN)
-        
-        label("OUT_1", self.cx + LANE_WIDTH_PX*0.5, m, COLOR_OUT)
-        label("OUT_2", self.cx + LANE_WIDTH_PX*1.5, m, COLOR_OUT)
-        label("OUT_3", self.width-m, self.cy + LANE_WIDTH_PX*0.5, COLOR_OUT)
-        label("OUT_4", self.width-m, self.cy + LANE_WIDTH_PX*1.5, COLOR_OUT)
-        label("OUT_5", self.cx - LANE_WIDTH_PX*0.5, self.height-m, COLOR_OUT)
-        label("OUT_6", self.cx - LANE_WIDTH_PX*1.5, self.height-m, COLOR_OUT)
-        label("OUT_7", m, self.cy - LANE_WIDTH_PX*0.5, COLOR_OUT)
-        label("OUT_8", m, self.cy - LANE_WIDTH_PX*1.5, COLOR_OUT)
+
+        # Use self.points instead of global POINTS
+        for lane_id, (x, y) in self.points.items():
+            color = COLOR_IN if lane_id.startswith("IN") else COLOR_OUT
+            label(lane_id, x, y, color)
+
 
 class IntersectionEnv:
     """
@@ -187,12 +235,14 @@ class IntersectionEnv:
         :param config: Configuration dictionary
             - traffic_flow: bool, if True -> single agent with NPCs (traffic flow enabled)
             - num_agents: int, number of agents (if traffic_flow=False)
+            - num_lanes: int, number of lanes per direction (if None, defaults to 3)
             - traffic_density: float, traffic density (0.0-1.0) for traffic flow
             - use_team_reward: bool, use team reward mixing (only for multi-agent)
             - reward_config: dict, reward configuration
             - render_mode: str, 'human' or None
             - ego_routes: list of (start, end) tuples for ego vehicles
             - max_steps: int, maximum steps per episode
+            - respawn_enabled: bool, if True, agents will respawn at their starting position when they crash or disappear (within max_steps)
         """
         if config is None:
             config = {}
@@ -204,6 +254,20 @@ class IntersectionEnv:
         self.render_mode = config.get('render_mode', None)
         self.ego_routes = config.get('ego_routes', None)
         self.max_steps = config.get('max_steps', 2000)
+        self.respawn_enabled = config.get('respawn_enabled', False)  # Enable respawn for agents
+        
+        # Handle num_lanes configuration (if provided, build custom lane layout)
+        self.num_lanes = config.get('num_lanes', None)
+        if self.num_lanes is not None:
+            # Build custom lane layout based on num_lanes
+            self.lane_layout = build_lane_layout(self.num_lanes)
+            self.points = self.lane_layout['points']
+        else:
+            # Use default (3 lanes) as fallback
+            default_num_lanes = 3
+            self.num_lanes = default_num_lanes
+            self.lane_layout = build_lane_layout(default_num_lanes)
+            self.points = self.lane_layout['points']
         
         # Initialize pygame (needed for Road class font initialization)
         self.pygame_initialized = False
@@ -221,20 +285,38 @@ class IntersectionEnv:
             # Set window icon (default: assets/icon.png or assets/icon.ico)
             icon_path = config.get('icon_path', None)
             if icon_path is None:
+                # Get project root directory (one level up from Intersection/env.py)
+                # __file__ = Intersection/env.py
+                # os.path.dirname(__file__) = Intersection/
+                # os.path.dirname(os.path.dirname(__file__)) = project root (train/)
+                current_dir = os.path.dirname(os.path.abspath(__file__))
+                project_root = os.path.dirname(current_dir)
+                assets_dir = os.path.join(project_root, 'assets')
+                
                 # Try default paths in assets directory
-                default_paths = ['assets/icon.png', 'assets/icon.ico']
+                default_paths = [
+                    os.path.join(assets_dir, 'icon.png')
+                ]
                 for path in default_paths:
                     if os.path.exists(path):
                         icon_path = path
                         break
+                
+                # Debug: print path if not found (can be removed later)
+                if not icon_path:
+                    print(f"[DEBUG] Icon not found. Searched in: {assets_dir}")
+                    print(f"[DEBUG] Current file: {__file__}")
+                    print(f"[DEBUG] Project root: {project_root}")
             
             if icon_path and os.path.exists(icon_path):
                 # Load icon from file
                 try:
                     icon = pygame.image.load(icon_path)
                     pygame.display.set_icon(icon)
-                except:
+                    print(f"[DEBUG] Icon loaded successfully from: {icon_path}")
+                except Exception as e:
                     # If loading fails, create default icon
+                    print(f"[DEBUG] Failed to load icon: {e}")
                     self._set_default_icon()
             else:
                 # Create default icon (simple intersection symbol)
@@ -244,7 +326,11 @@ class IntersectionEnv:
             self.font = pygame.font.SysFont("Arial", 20)
         
         # Initialize road (requires pygame to be initialized)
-        self.road = Road()
+        # Pass num_lanes and points to Road so it renders correctly
+        road_num_lanes = self.num_lanes if self.num_lanes is not None else 3
+        self.road = Road(num_lanes=road_num_lanes, points=self.points)
+        # lane_layout is already set above based on num_lanes config
+        self.route_mapping = self._build_route_mapping(config.get('route_mapping'))
         
         # Initialize reward configuration
         self.use_team_reward = config.get('use_team_reward', False)
@@ -259,6 +345,7 @@ class IntersectionEnv:
         self.traffic_cars = pygame.sprite.Group()
         self.spawn_timer = 0
         self._init_traffic_routes()
+        self.default_route = self._get_default_route()
         
         # Agent storage (use Group so alive() works correctly)
         self.agents: List[Car] = []
@@ -285,19 +372,95 @@ class IntersectionEnv:
             'low': np.array([-1.0, -1.0]),
             'high': np.array([1.0, 1.0])
         }
+
+    def _build_route_mapping(self, custom_mapping: Optional[Dict[str, List[str]]]):
+        """
+        Build a lane mapping dict (IN_x -> [OUT_y,...]).
+        Allows custom overrides; falls back to presets per lane count.
+        """
+        if custom_mapping:
+            def normalize_lane(value, prefix):
+                if isinstance(value, str):
+                    lane = value.strip().upper()
+                    if lane.startswith('IN_') or lane.startswith('OUT_'):
+                        return lane
+                    if lane.startswith('IN') or lane.startswith('OUT'):
+                        name = lane.replace('IN', 'IN_').replace('OUT', 'OUT_')
+                        return name
+                    if lane.isdigit():
+                        return f"{prefix}{lane}"
+                    digits = ''.join(ch for ch in lane if ch.isdigit())
+                    if digits:
+                        return f"{prefix}{digits}"
+                    return f"{prefix}{lane}"
+                return f"{prefix}{int(value)}"
+
+            mapping = {}
+            for raw_start, raw_targets in custom_mapping.items():
+                start_id = normalize_lane(raw_start, 'IN_')
+                target_list = raw_targets if isinstance(raw_targets, list) else [raw_targets]
+                mapping[start_id] = [normalize_lane(t, 'OUT_') for t in target_list]
+            return mapping
+
+        # Fallback to presets based on num_lanes (use self.num_lanes if set, otherwise default to 3)
+        num_lanes = self.num_lanes if self.num_lanes is not None else 3
+        if num_lanes == 2:
+            return DEFAULT_ROUTE_MAPPING_2LANES
+        if num_lanes == 3:
+            return DEFAULT_ROUTE_MAPPING_3LANES
+        return {}
     
     def _init_traffic_routes(self):
-        """Initialize traffic routes for NPC generation."""
-        self.traffic_routes = [
-            ('IN_6', 'OUT_2'), # South straight
-            ('IN_5', 'OUT_7'), # South left turn
-            ('IN_4', 'OUT_8'), # East straight
-            ('IN_3', 'OUT_5'), # East left turn
-            ('IN_2', 'OUT_6'), # North straight
-            ('IN_1', 'OUT_3'), # North left turn
-            ('IN_8', 'OUT_4'), # West straight
-            ('IN_7', 'OUT_1')  # West left turn
-        ]
+        """Initialize traffic routes for NPC generation based on mapping."""
+        layout = self.lane_layout
+        dir_order = layout['dir_order']
+        opposite = {'N': 'S', 'S': 'N', 'E': 'W', 'W': 'E'}
+        left_turn = {'N': 'E', 'E': 'S', 'S': 'W', 'W': 'N'}  # 90 deg left (driver view)
+
+        routes: List[Tuple[str, str]] = []
+        for direction in dir_order:
+            for start_id in layout['in_by_dir'][direction]:
+                mapped_targets = self.route_mapping.get(start_id, [])
+                if mapped_targets:
+                    for end_id in mapped_targets:
+                        if end_id in self.points:
+                            routes.append((start_id, end_id))
+                    continue
+
+                # Fallback: straight + left using lane indices
+                straight_out_lanes = layout['out_by_dir'][opposite[direction]]
+                left_out_lanes = layout['out_by_dir'][left_turn[direction]]
+                idx = layout['idx_of'][start_id]
+
+                if straight_out_lanes:
+                    straight_out = straight_out_lanes[min(idx, len(straight_out_lanes) - 1)]
+                    routes.append((start_id, straight_out))
+                if left_out_lanes:
+                    left_out = left_out_lanes[min(idx, len(left_out_lanes) - 1)]
+                    routes.append((start_id, left_out))
+
+        self.traffic_routes = routes
+
+    def _get_default_route(self):
+        """Pick a stable default ego route based on mapping preference."""
+        if self.route_mapping:
+            # use first mapping entry with valid targets
+            for start_id, targets in self.route_mapping.items():
+                for end_id in targets:
+                    if end_id in self.points:
+                        return (start_id, end_id)
+        if self.traffic_routes:
+            return self.traffic_routes[0]
+
+        # Fallback to south-to-north straight if possible
+        layout = self.lane_layout
+        in_south = layout['in_by_dir']['S']
+        out_north = layout['out_by_dir']['N']
+        if in_south and out_north:
+            idx = min(1, len(in_south) - 1)
+            return (in_south[idx], out_north[min(idx, len(out_north) - 1)])
+
+        return ('IN_1', 'OUT_1')
     
     def _load_reward_config(self, reward_config):
         """Load reward coefficients from config dictionary."""
@@ -355,8 +518,9 @@ class IntersectionEnv:
         # Create agents
         if self.traffic_flow:
             # Single agent mode
-            route = self.ego_routes[0] if self.ego_routes else ('IN_6', 'OUT_2')
-            agent = Car(route[0], route[1])
+            route = self.ego_routes[0] if self.ego_routes else self.default_route
+            agent = Car(route[0], route[1], respawn_enabled=self.respawn_enabled, 
+                       points=self.points, lane_layout=self.lane_layout)
             agent.image_orig.fill((255, 0, 0))  # Red for ego
             pygame.draw.rect(agent.image_orig, (200,200,200), 
                            (agent.length*0.7, 2, agent.length*0.25, agent.width-4))
@@ -377,7 +541,8 @@ class IntersectionEnv:
             routes = self.ego_routes if self.ego_routes else default_routes[:self.num_agents]
             
             for i, route in enumerate(routes):
-                agent = Car(route[0], route[1])
+                agent = Car(route[0], route[1], respawn_enabled=self.respawn_enabled,
+                           points=self.points, lane_layout=self.lane_layout)
                 # Different colors for different agents
                 color = COLOR_CAR_LIST[i % len(COLOR_CAR_LIST)]
                 agent.image_orig.fill(color)
@@ -473,20 +638,75 @@ class IntersectionEnv:
             )
             rewards.append(reward)
         
+        # Handle respawn for crashed agents (if enabled and within max_steps)
+        # Respawn only for specific crash types: CRASH_CAR, CRASH_LINE, CRASH_WALL
+        if self.respawn_enabled and (self.max_steps is None or self.step_count < self.max_steps):
+            for i, agent in enumerate(self.agents):
+                if not agent.respawn_enabled:
+                    continue
+                
+                # Get collision status
+                collision_info = collision_dict.get(agent, (False, "ALIVE"))
+                has_collision, status = collision_info if isinstance(collision_info, tuple) and len(collision_info) >= 2 else (False, "ALIVE")
+                
+                # Only respawn for specific crash types: CRASH_CAR, CRASH_LINE, CRASH_WALL
+                # Do NOT respawn for SUCCESS or ALIVE
+                if has_collision and status in ["CRASH_CAR", "CRASH_LINE", "CRASH_WALL"]:
+                    
+                    # Respawn agent
+                    agent.respawn_count += 1
+                    # Reinitialize agent at original position
+                    start_pos = self.points[agent.original_start_id]
+                    agent.pos_x = float(start_pos[0])
+                    agent.pos_y = float(start_pos[1])
+                    agent.speed = 0.0
+                    agent.acc = 0.0
+                    agent.steering = 0.0
+                    
+                    # Reinitialize path and navigation
+                    agent.intention = agent._determine_intention(agent.original_start_id, agent.original_end_id)
+                    agent.path = agent._generate_path(agent.original_start_id, agent.original_end_id)
+                    agent.path_index = 0
+                    agent.end_x, agent.end_y = agent.path[-1]
+                    
+                    # Reset heading
+                    if len(agent.path) > 1:
+                        agent.heading = calculate_heading_rad(agent.path[0], agent.path[1])
+                    else:
+                        agent.heading = 0.0
+                    
+                    # Reset sprite
+                    agent.rect.center = (int(agent.pos_x), int(agent.pos_y))
+                    agent.image = pygame.transform.rotate(agent.image_orig, math.degrees(agent.heading))
+                    agent.rect = agent.image.get_rect(center=agent.rect.center)
+                    agent.mask = pygame.mask.from_surface(agent.image)
+                    
+                    # Reinitialize lidar
+                    agent.lidar = Lidar(agent)
+                    
+                    # Ensure agent is in the group (in case it was removed)
+                    if agent not in self.agent_group:
+                        self.agent_group.add(agent)
+                    
+                    # Update collision dict to mark agent as alive after respawn
+                    collision_dict[agent] = (False, "ALIVE")
+        
         # Check termination conditions
         terminated = False
         truncated = False
         
-        # Check if any agent is done
+        # Check if any agent is done (only terminate if respawn is disabled or all agents succeeded)
         for agent in self.agents:
             if agent.alive():
                 collision_info = collision_dict.get(agent, (False, "ALIVE"))
                 if collision_info[0]:
-                    terminated = True
-                    break
+                    # Only terminate if respawn is disabled, or if agent succeeded
+                    if not self.respawn_enabled or collision_info[1] == "SUCCESS":
+                        terminated = True
+                        break
         
-        # Check step limit
-        if self.step_count >= self.max_steps:
+        # Check step limit (skip if max_steps is None for continuous running)
+        if self.max_steps is not None and self.step_count >= self.max_steps:
             truncated = True
         
         # Get observation
@@ -515,24 +735,27 @@ class IntersectionEnv:
     def _update_traffic_flow(self):
         """Update traffic flow: spawn NPCs and update their behavior."""
         # Spawn logic
-        self.spawn_timer += 1
-        spawn_interval = int(90 / (self.traffic_density + 0.01))
+        arrival_rate = self.traffic_density 
+        dt = 1.0 / FPS 
+
+        spawn_prob = 1.0 - math.exp(-arrival_rate * dt)
         
-        if self.spawn_timer >= spawn_interval:
+        if random.random() < spawn_prob:
             self._try_spawn_traffic_car()
-            self.spawn_timer = 0
         
         # Update NPCs
-        all_vehicles = list(self.traffic_cars)
-        if len(self.agents) > 0 and self.agents[0].alive():
-            all_vehicles.append(self.agents[0])
+        # NPCs should not consider ego vehicle in their planning
+        all_vehicles_for_npc = list(self.traffic_cars)
         
         for car in list(self.traffic_cars):
-            # Update lidar
-            car.lidar.update(self.road.collision_mask, all_vehicles)
+            # Update lidar (include ego vehicle for sensor detection)
+            all_vehicles_for_lidar = list(self.traffic_cars)
+            if len(self.agents) > 0 and self.agents[0].alive():
+                all_vehicles_for_lidar.append(self.agents[0])
+            car.lidar.update(self.road.collision_mask, all_vehicles_for_lidar)
             
-            # Autonomous driving
-            action = car.plan_autonomous_action(self.road.collision_mask, all_vehicles)
+            # Autonomous driving (exclude ego vehicle from planning)
+            action = car.plan_autonomous_action(self.road.collision_mask, all_vehicles_for_npc)
             car.update(action)
             
             # Remove if arrived
@@ -565,7 +788,7 @@ class IntersectionEnv:
         start_node = route[0]
         
         # Check if spawn point is blocked
-        sx, sy = POINTS[start_node]
+        sx, sy = self.points[start_node]
         
         is_blocked = False
         check_list = list(self.traffic_cars)
@@ -579,7 +802,7 @@ class IntersectionEnv:
                 break
         
         if not is_blocked:
-            new_car = Car(route[0], route[1])
+            new_car = Car(route[0], route[1], points=self.points, lane_layout=self.lane_layout)
             # Mark as NPC color (gray)
             new_car.image_orig.fill((150, 150, 150))
             pygame.draw.rect(new_car.image_orig, (0,0,0), 

@@ -3,7 +3,11 @@
 import pygame
 import math
 import numpy as np
-from config import *
+# Support both relative and absolute imports
+try:
+    from .config import *
+except ImportError:
+    from config import *
 
 class Lidar:
     def __init__(self, owner_car):
