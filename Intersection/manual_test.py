@@ -9,15 +9,19 @@ import os
 
 # Handle imports for both script execution and module import
 try:
-    # Try relative import (when used as a module)
-    from .env import IntersectionEnv
-    from .config import DEFAULT_REWARD_CONFIG, FPS, SCALE
+    # First try: import from installed package
+    from Intersection import IntersectionEnv, DEFAULT_REWARD_CONFIG
+    from Intersection.config import FPS, SCALE
 except ImportError:
-    # Fall back to absolute import (when run as a script)
-    # Add parent directory to path for script execution
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    from env import IntersectionEnv
-    from config import DEFAULT_REWARD_CONFIG, FPS, SCALE
+    try:
+        # Second try: relative import (when used as a module)
+        from .env import IntersectionEnv
+        from .config import DEFAULT_REWARD_CONFIG, FPS, SCALE
+    except ImportError:
+        # Fall back: absolute import (when run as a script from source)
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from Intersection.env import IntersectionEnv
+        from Intersection.config import DEFAULT_REWARD_CONFIG, FPS, SCALE
 
 
 def main():

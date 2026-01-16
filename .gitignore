@@ -33,5 +33,12 @@ Thumbs.db
 checkpoints/
 logs/
 
+# Python package build files
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
 # Assets (optional - uncomment if you don't want to track assets)
 # assets/

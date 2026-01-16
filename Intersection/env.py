@@ -285,17 +285,23 @@ class IntersectionEnv:
             # Set window icon (default: assets/icon.png or assets/icon.ico)
             icon_path = config.get('icon_path', None)
             if icon_path is None:
-                # Get project root directory (one level up from Intersection/env.py)
-                # __file__ = Intersection/env.py
-                # os.path.dirname(__file__) = Intersection/
-                # os.path.dirname(os.path.dirname(__file__)) = project root (train/)
+                # Try to find assets in multiple locations:
+                # 1. In package directory (when installed as package)
+                # 2. In project root (when running from source)
                 current_dir = os.path.dirname(os.path.abspath(__file__))
                 project_root = os.path.dirname(current_dir)
-                assets_dir = os.path.join(project_root, 'assets')
                 
-                # Try default paths in assets directory
+                # Try package directory first (for installed package)
+                package_assets_dir = os.path.join(current_dir, 'assets')
+                # Try project root (for development)
+                project_assets_dir = os.path.join(project_root, 'assets')
+                
+                # Try default paths in both locations
                 default_paths = [
-                    os.path.join(assets_dir, 'icon.png')
+                    os.path.join(package_assets_dir, 'icon.png'),
+                    os.path.join(project_assets_dir, 'icon.png'),
+                    os.path.join(package_assets_dir, 'icon.ico'),
+                    os.path.join(project_assets_dir, 'icon.ico'),
                 ]
                 for path in default_paths:
                     if os.path.exists(path):
@@ -304,7 +310,7 @@ class IntersectionEnv:
                 
                 # Debug: print path if not found (can be removed later)
                 if not icon_path:
-                    print(f"[DEBUG] Icon not found. Searched in: {assets_dir}")
+                    print(f"[DEBUG] Icon not found. Searched in: {package_assets_dir}, {project_assets_dir}")
                     print(f"[DEBUG] Current file: {__file__}")
                     print(f"[DEBUG] Project root: {project_root}")
             
