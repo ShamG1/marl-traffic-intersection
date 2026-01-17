@@ -285,8 +285,6 @@ traffic_test_main()  # 交通流测试
 - [x] 使用 MAPPO 算法训练
 - [ ] 使用 MCTS 算法训练
 - [ ] 支持多地图测试
-- [ ] 接入 Gym/PettingZoo 接口
-- [ ] 使用 PPO / MADDPG 算法训练
 
 ---
 
