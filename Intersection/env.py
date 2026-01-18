@@ -701,15 +701,26 @@ class IntersectionEnv:
         terminated = False
         truncated = False
         
-        # Check if any agent is done (only terminate if respawn is disabled or all agents succeeded)
-        for agent in self.agents:
-            if agent.alive():
-                collision_info = collision_dict.get(agent, (False, "ALIVE"))
-                if collision_info[0]:
-                    # Only terminate if respawn is disabled, or if agent succeeded
-                    if not self.respawn_enabled or collision_info[1] == "SUCCESS":
-                        terminated = True
-                        break
+        # Check if all agents are done (only terminate if respawn is disabled or all agents succeeded)
+        # Count alive agents and successful agents
+        alive_agents = [agent for agent in self.agents if agent.alive()]
+        successful_agents = []
+        
+        for agent in alive_agents:
+            collision_info = collision_dict.get(agent, (False, "ALIVE"))
+            if collision_info[0]:
+                # If respawn is disabled, any collision terminates
+                if not self.respawn_enabled:
+                    terminated = True
+                    break
+                # If agent succeeded, count it
+                elif collision_info[1] == "SUCCESS":
+                    successful_agents.append(agent)
+        
+        # Terminate only if all alive agents have succeeded
+        if self.respawn_enabled and len(successful_agents) > 0:
+            if len(successful_agents) == len(alive_agents):
+                terminated = True
         
         # Check step limit (skip if max_steps is None for continuous running)
         if self.max_steps is not None and self.step_count >= self.max_steps:
@@ -987,11 +998,34 @@ class IntersectionEnv:
         if self.render_mode != 'human' or not self.pygame_initialized:
             return
         
-        # Handle events
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                pygame.quit()
+        # Check if pygame is actually initialized (may have been closed by another process)
+        if not pygame.get_init():
+            # Try to reinitialize
+            try:
+                pygame.init()
+                if self.render_mode == 'human':
+                    self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
+                    pygame.display.set_caption(TITLE)
+                    self.pygame_initialized = True
+                else:
+                    return
+            except Exception as e:
+                # If reinitialization fails, skip rendering
                 return
+        
+        # Handle events
+        try:
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    pygame.quit()
+                    self.pygame_initialized = False
+                    return
+        except pygame.error as e:
+            # If pygame is not initialized, skip event handling
+            if "not initialized" in str(e).lower():
+                self.pygame_initialized = False
+                return
+            raise
         
         # Clear screen
         self.screen.fill((0, 0, 0))

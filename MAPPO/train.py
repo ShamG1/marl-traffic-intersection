@@ -8,6 +8,8 @@ import torch
 import time
 from datetime import datetime
 import json
+import csv
+from tqdm import tqdm
 
 # Add parent directory to path to import env
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -186,7 +188,10 @@ class Trainer:
             entropy_coef=0.01,
             value_coef=0.5,
             max_grad_norm=0.5,
-            device=device
+            device=device,
+            use_lstm=True,  # Enable LSTM
+            sequence_length=5,  # Use last 5 observations
+            lstm_hidden_dim=128  # LSTM hidden dimension
         )
         
         # Training statistics
@@ -211,6 +216,12 @@ class Trainer:
             for i, route in enumerate(ego_routes):
                 f.write(f"  Agent {i}: {route[0]} -> {route[1]}\n")
             f.write("=" * 80 + "\n")
+        
+        # CSV file for episode rewards
+        self.csv_file = os.path.join(save_dir, 'episode_rewards.csv')
+        with open(self.csv_file, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow(['Episode', 'Total_Reward', 'Mean_Reward', 'Episode_Length'])
     
     def log(self, message: str):
         """Log message to file and console."""
@@ -227,18 +238,50 @@ class Trainer:
         episode = 0
         step_count = 0
         
+        # Create a single progress bar for episode step progress (reused across episodes)
+        try:
+            is_terminal = hasattr(sys.stdout, 'isatty') and sys.stdout.isatty()
+        except:
+            is_terminal = True
+        
+        # Single progress bar showing current episode's step progress
+        step_pbar = tqdm(
+            total=self.max_steps_per_episode,
+            desc="Episode 1",
+            leave=True,
+            ncols=120,
+            miniters=1,
+            mininterval=0.1,
+            file=sys.stdout,
+            disable=False,
+            bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'
+        )
+        
+        step_times = []  # Track step times across all episodes
+        
         while episode < self.max_episodes:
             episode += 1
             self.stats['episode'] = episode
             
+            # Reset progress bar for new episode
+            step_pbar.reset(total=self.max_steps_per_episode)
+            step_pbar.set_description(f"Episode {episode}/{self.max_episodes}")
+            
             # Reset environment
             obs, info = self.env.reset()
+            # Reset LSTM hidden states for new episode
+            if self.mappo.use_lstm:
+                self.mappo.reset_buffer()
             episode_reward = np.zeros(self.num_agents)
             episode_length = 0
             done = False
             
-            # Episode loop
+            episode_step_times = []  # Track step times for current episode
+            
             while not done and episode_length < self.max_steps_per_episode:
+                # Record step start time
+                step_start_time = time.time()
+                
                 # Select actions
                 actions, log_probs = self.mappo.select_actions(obs)
                 
@@ -266,12 +309,34 @@ class Trainer:
                 episode_length += 1
                 step_count += 1
                 
+                # Calculate step time
+                step_time = time.time() - step_start_time
+                step_times.append(step_time)
+                episode_step_times.append(step_time)
+                avg_step_time = np.mean(step_times) if step_times else 0.0
+                episode_avg_step_time = np.mean(episode_step_times) if episode_step_times else 0.0
+                
+                # Update step progress bar with current episode info
+                current_total_reward = episode_reward.sum()
+                current_mean_reward = episode_reward.mean()
+                step_pbar.set_postfix({
+                    'Total Reward': f'{current_total_reward:.2f}',
+                    'Mean Reward': f'{current_mean_reward:.2f}',
+                    'Step Time': f'{step_time*1000:.1f}ms',
+                    'Avg Step': f'{episode_avg_step_time*1000:.1f}ms'
+                })
+                # Update progress bar
+                step_pbar.update(1)
+                step_pbar.refresh()  # Force refresh to ensure display
+                
                 # Update policy if buffer reaches update_frequency
                 # This ensures updates happen even if episode is very long (e.g., with respawn)
                 buffer_size = len(self.mappo.buffer['obs'][0])
                 if buffer_size >= self.update_frequency:
                     self.mappo.update(next_obs, epochs=10, batch_size=64)
-                    self.log(f"Policy updated at step {step_count} (buffer size: {buffer_size})")
+                    # Write to log file without printing to avoid interfering with progress bar
+                    with open(self.log_file, 'a') as f:
+                        f.write(f"Policy updated at step {step_count} (buffer size: {buffer_size})\n")
                 
                 obs = next_obs
                 
@@ -283,12 +348,29 @@ class Trainer:
             buffer_size = len(self.mappo.buffer['obs'][0])
             if buffer_size > 0:
                 self.mappo.update(obs, epochs=10, batch_size=64)
-                self.log(f"Final update at episode end (buffer size: {buffer_size})")
+                # Write to log file without printing to avoid interfering with progress bar
+                with open(self.log_file, 'a') as f:
+                    f.write(f"Final update at episode end (buffer size: {buffer_size})\n")
             
             # Update statistics
             self.stats['total_steps'] = step_count
             self.stats['episode_rewards'].append(episode_reward.mean())
             self.stats['episode_lengths'].append(episode_length)
+            
+            # Write episode rewards to CSV
+            total_reward = episode_reward.sum()  # Sum of all agents' rewards
+            mean_reward = episode_reward.mean()
+            with open(self.csv_file, 'a', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow([episode, total_reward, mean_reward, episode_length])
+            
+            # Print episode reward information (below progress bar)
+            print(
+                f"\nEpisode {episode:5d} | "
+                f"Total Reward: {total_reward:8.2f} | "
+                f"Mean Reward: {mean_reward:7.2f} | "
+                f"Length: {episode_length:4d} steps"
+            )
             
             # Check for success/crash
             collisions = info.get('collisions', {})
@@ -338,6 +420,9 @@ class Trainer:
                 with open(stats_path, 'w') as f:
                     json.dump(self.stats, f, indent=2)
         
+        # Close step progress bar
+        step_pbar.close()
+        
         # Final save
         final_path = os.path.join(self.save_dir, 'mappo_final.pth')
         self.mappo.save(final_path)
@@ -357,7 +442,7 @@ def main():
     
     parser = argparse.ArgumentParser(description='Train MAPPO for intersection navigation')
     parser.add_argument('--num-agents', type=int, default=6, help='Number of agents')
-    parser.add_argument('--num-lanes', type=int, default=3, help='Number of lanes per direction')
+    parser.add_argument('--num-lanes', type=int, default=2, help='Number of lanes per direction')
     parser.add_argument('--max-episodes', type=int, default=10000, help='Max training episodes')
     parser.add_argument('--update-frequency', type=int, default=2048, help='Steps before update')
     parser.add_argument('--device', type=str, default='cuda', choices=['cpu', 'cuda'], help='Device')

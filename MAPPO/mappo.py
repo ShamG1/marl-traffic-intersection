@@ -33,7 +33,10 @@ class MAPPO:
         entropy_coef: float = 0.01,
         value_coef: float = 0.5,
         max_grad_norm: float = 0.5,
-        device: str = 'cpu'
+        device: str = 'cpu',
+        use_lstm: bool = True,
+        sequence_length: int = 5,
+        lstm_hidden_dim: int = 128
     ):
         """
         Initialize MAPPO.
@@ -65,17 +68,25 @@ class MAPPO:
         self.value_coef = value_coef
         self.max_grad_norm = max_grad_norm
         self.device = torch.device(device)
+        self.use_lstm = use_lstm
+        self.sequence_length = sequence_length
+        self.lstm_hidden_dim = lstm_hidden_dim
         
         # Create actor and critic networks for each agent
         self.actors = nn.ModuleList([
-            Actor(obs_dim, action_dim, hidden_dim).to(self.device)
+            Actor(obs_dim, action_dim, hidden_dim, lstm_hidden_dim, use_lstm, sequence_length).to(self.device)
             for _ in range(num_agents)
         ])
         
         self.critics = nn.ModuleList([
-            Critic(obs_dim, hidden_dim).to(self.device)
+            Critic(obs_dim, hidden_dim, lstm_hidden_dim, use_lstm, sequence_length).to(self.device)
             for _ in range(num_agents)
         ])
+        
+        # Initialize LSTM hidden states for each agent (if using LSTM)
+        if self.use_lstm:
+            self.actor_hidden_states = [None for _ in range(num_agents)]
+            self.critic_hidden_states = [None for _ in range(num_agents)]
         
         # Optimizers
         self.actor_optimizers = [
@@ -87,6 +98,13 @@ class MAPPO:
             optim.Adam(critic.parameters(), lr=lr_critic)
             for critic in self.critics
         ]
+        
+        # Observation history buffer for LSTM (maintains last sequence_length observations)
+        # Initialize before reset_buffer() since reset_buffer() uses it
+        if self.use_lstm:
+            self.obs_history = [deque(maxlen=sequence_length) for _ in range(num_agents)]
+        else:
+            self.obs_history = None
         
         # Experience buffer
         self.reset_buffer()
@@ -101,6 +119,14 @@ class MAPPO:
             'log_probs': [[] for _ in range(self.num_agents)],
             'dones': [[] for _ in range(self.num_agents)],
         }
+        
+        # Reset LSTM hidden states
+        if self.use_lstm:
+            self.actor_hidden_states = [None for _ in range(self.num_agents)]
+            self.critic_hidden_states = [None for _ in range(self.num_agents)]
+            # Clear observation history
+            for i in range(self.num_agents):
+                self.obs_history[i].clear()
     
     def select_actions(self, obs: np.ndarray, deterministic: bool = False) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -114,19 +140,47 @@ class MAPPO:
             actions: Selected actions (num_agents, action_dim)
             log_probs: Log probabilities of actions (num_agents, 1)
         """
-        obs_tensor = torch.FloatTensor(obs).to(self.device)
         actions = []
         log_probs = []
         
         for i in range(self.num_agents):
-            if deterministic:
-                action = self.actors[i].get_action(obs_tensor[i:i+1], deterministic=True)
-                actions.append(action.detach().cpu().numpy()[0])
-                log_probs.append(np.array([0.0]))  # Dummy log prob for deterministic
+            if self.use_lstm:
+                # Update observation history
+                self.obs_history[i].append(obs[i])
+                
+                # Build sequence tensor
+                if len(self.obs_history[i]) < self.sequence_length:
+                    # Pad with first observation if history is not full
+                    seq_obs = list(self.obs_history[i])
+                    while len(seq_obs) < self.sequence_length:
+                        seq_obs.insert(0, seq_obs[0] if seq_obs else obs[i])
+                    seq_obs = np.array(seq_obs)
+                else:
+                    seq_obs = np.array(list(self.obs_history[i]))
+                
+                seq_obs_tensor = torch.FloatTensor(seq_obs).unsqueeze(0).to(self.device)  # (1, seq_len, obs_dim)
+                
+                if deterministic:
+                    action, new_hidden = self.actors[i].get_action(seq_obs_tensor, deterministic=True, hidden_state=self.actor_hidden_states[i])
+                    self.actor_hidden_states[i] = new_hidden
+                    actions.append(action.detach().cpu().numpy()[0])
+                    log_probs.append(np.array([0.0]))  # Dummy log prob for deterministic
+                else:
+                    action, log_prob, new_hidden = self.actors[i].get_action(seq_obs_tensor, deterministic=False, hidden_state=self.actor_hidden_states[i])
+                    self.actor_hidden_states[i] = new_hidden
+                    actions.append(action.detach().cpu().numpy()[0])
+                    log_probs.append(log_prob.detach().cpu().numpy()[0])
             else:
-                action, log_prob = self.actors[i].get_action(obs_tensor[i:i+1])
-                actions.append(action.detach().cpu().numpy()[0])
-                log_probs.append(log_prob.detach().cpu().numpy()[0])
+                # Standard MLP
+                obs_tensor = torch.FloatTensor(obs[i:i+1]).to(self.device)
+                if deterministic:
+                    action = self.actors[i].get_action(obs_tensor, deterministic=True)
+                    actions.append(action.detach().cpu().numpy()[0])
+                    log_probs.append(np.array([0.0]))
+                else:
+                    action, log_prob = self.actors[i].get_action(obs_tensor)
+                    actions.append(action.detach().cpu().numpy()[0])
+                    log_probs.append(log_prob.detach().cpu().numpy()[0])
         
         return np.array(actions), np.array(log_probs)
     
@@ -140,12 +194,29 @@ class MAPPO:
         Returns:
             values: Value estimates (num_agents, 1)
         """
-        obs_tensor = torch.FloatTensor(obs).to(self.device)
         values = []
         
         for i in range(self.num_agents):
-            value = self.critics[i](obs_tensor[i:i+1])
-            values.append(value.detach().cpu().numpy()[0])
+            if self.use_lstm:
+                # Use current observation history
+                if len(self.obs_history[i]) < self.sequence_length:
+                    # Pad with first observation if history is not full
+                    seq_obs = list(self.obs_history[i])
+                    while len(seq_obs) < self.sequence_length:
+                        seq_obs.insert(0, seq_obs[0] if seq_obs else obs[i])
+                    seq_obs = np.array(seq_obs)
+                else:
+                    seq_obs = np.array(list(self.obs_history[i]))
+                
+                seq_obs_tensor = torch.FloatTensor(seq_obs).unsqueeze(0).to(self.device)  # (1, seq_len, obs_dim)
+                value, new_hidden = self.critics[i](seq_obs_tensor, hidden_state=self.critic_hidden_states[i])
+                self.critic_hidden_states[i] = new_hidden
+                values.append(value.detach().cpu().numpy()[0])
+            else:
+                # Standard MLP
+                obs_tensor = torch.FloatTensor(obs[i:i+1]).to(self.device)
+                value = self.critics[i](obs_tensor)
+                values.append(value.detach().cpu().numpy()[0])
         
         return np.array(values)
     
@@ -246,7 +317,21 @@ class MAPPO:
             advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
             
             # Convert to tensors
-            obs_tensor = torch.FloatTensor(obs).to(self.device)
+            if self.use_lstm:
+                # Build sequence observations for LSTM
+                # For each timestep, we need the previous sequence_length observations
+                seq_obs_list = []
+                for t in range(len(obs)):
+                    if t < self.sequence_length:
+                        # Pad with first observation
+                        seq = [obs[0]] * (self.sequence_length - t - 1) + list(obs[:t+1])
+                    else:
+                        seq = list(obs[t - self.sequence_length + 1:t + 1])
+                    seq_obs_list.append(np.array(seq))
+                obs_tensor = torch.FloatTensor(np.array(seq_obs_list)).to(self.device)  # (dataset_size, sequence_length, obs_dim)
+            else:
+                obs_tensor = torch.FloatTensor(obs).to(self.device)
+            
             actions_tensor = torch.FloatTensor(actions).to(self.device)
             old_log_probs_tensor = torch.FloatTensor(old_log_probs).to(self.device).unsqueeze(1)
             advantages_tensor = torch.FloatTensor(advantages).to(self.device).unsqueeze(1)
@@ -271,9 +356,14 @@ class MAPPO:
                     batch_returns = returns_tensor[batch_indices]
                     
                     # Update actor
-                    new_log_probs, entropy = self.actors[agent_id].evaluate_actions(
-                        batch_obs, batch_actions
-                    )
+                    if self.use_lstm:
+                        new_log_probs, entropy, _ = self.actors[agent_id].evaluate_actions(
+                            batch_obs, batch_actions, hidden_state=None
+                        )
+                    else:
+                        new_log_probs, entropy = self.actors[agent_id].evaluate_actions(
+                            batch_obs, batch_actions
+                        )
                     
                     ratio = torch.exp(new_log_probs - batch_old_log_probs)
                     surr1 = ratio * batch_advantages
@@ -288,10 +378,17 @@ class MAPPO:
                     self.actor_optimizers[agent_id].step()
                     
                     # Update critic
-                    new_values = self.critics[agent_id](batch_obs)
+                    if self.use_lstm:
+                        new_values, _ = self.critics[agent_id](batch_obs, hidden_state=None)
+                    else:
+                        new_values = self.critics[agent_id](batch_obs)
                     
                     if self.value_clip:
-                        old_values = self.critics[agent_id](batch_obs).detach()
+                        if self.use_lstm:
+                            old_values, _ = self.critics[agent_id](batch_obs, hidden_state=None)
+                            old_values = old_values.detach()
+                        else:
+                            old_values = self.critics[agent_id](batch_obs).detach()
                         value_clipped = old_values + torch.clamp(
                             new_values - old_values, -self.clip_epsilon, self.clip_epsilon
                         )
