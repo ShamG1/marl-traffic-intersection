@@ -47,7 +47,7 @@ def main():
     config = {
         'traffic_flow': True,  # Single agent with traffic flow
         'num_lanes': num_lanes,  # Set number of lanes
-        'traffic_density': 10,  # Moderate traffic density
+        'traffic_density': 5,  # Moderate traffic density
         'render_mode': 'human',
         'max_steps': 2000,
         'reward_config': DEFAULT_REWARD_CONFIG['reward_config'],

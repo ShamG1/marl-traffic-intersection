@@ -71,14 +71,19 @@ _DEFAULT_LANE_LAYOUT = build_lane_layout(_DEFAULT_NUM_LANES)
 _DEFAULT_POINTS = _DEFAULT_LANE_LAYOUT['points']
 
 class Car(pygame.sprite.Sprite):
-    def __init__(self, start_id, end_id, speed_factor=1.0, respawn_enabled=False, points=None, lane_layout=None):
+    def __init__(self, start_id, end_id, speed_factor=1.0, respawn_enabled=False,
+                 points=None, lane_layout=None, graphics_enabled: bool = True):
         super().__init__()
         
-        # 0. Respawn properties
+        # 0. Respawn & performance properties
         self.respawn_enabled = respawn_enabled
         self.respawn_count = 0  # Track number of respawns
         self.original_start_id = start_id  # Save original route for respawn
         self.original_end_id = end_id
+        # Whether to update pygame Surfaces / Masks each step.
+        # For high-speed, headless rollouts (e.g. MCTS) this can be disabled to
+        # avoid expensive image rotations and mask recomputation.
+        self.graphics_enabled = graphics_enabled
         
         # Use provided points and lane_layout, or fall back to default (3 lanes)
         self.points = points if points is not None else _DEFAULT_POINTS
@@ -167,13 +172,16 @@ class Car(pygame.sprite.Sprite):
         self.pos_y -= self.speed * math.sin(self.heading)
 
         # --- 3. Visual update ---
+        # In headless / fast-physics mode (graphics_disabled), we still maintain a
+        # reasonable rect for cheap AABB checks, but skip expensive rotation and
+        # mask generation, which are major CPU hotspots during MCTS rollouts.
         self.rect.center = (int(self.pos_x), int(self.pos_y))
-        
-        # Rotate image (Pygame rotates CCW)
-        deg = math.degrees(self.heading)
-        self.image = pygame.transform.rotate(self.image_orig, deg)
-        self.rect = self.image.get_rect(center=self.rect.center)
-        self.mask = pygame.mask.from_surface(self.image)
+        if self.graphics_enabled:
+            # Full graphical update for interactive / rendered environments
+            deg = math.degrees(self.heading)
+            self.image = pygame.transform.rotate(self.image_orig, deg)
+            self.rect = self.image.get_rect(center=self.rect.center)
+            self.mask = pygame.mask.from_surface(self.image)
 
         # --- 4. Navigation update ---
         # Find nearest point on path

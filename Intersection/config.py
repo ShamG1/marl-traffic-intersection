@@ -3,7 +3,7 @@
 import math
 
 # === Screen and display settings ===
-WIDTH, HEIGHT = 900, 900
+WIDTH, HEIGHT = 750, 750
 FPS = 60
 TITLE = "MARL Intersection"
 

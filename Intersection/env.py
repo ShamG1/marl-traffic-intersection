@@ -255,6 +255,9 @@ class IntersectionEnv:
         self.ego_routes = config.get('ego_routes', None)
         self.max_steps = config.get('max_steps', 2000)
         self.respawn_enabled = config.get('respawn_enabled', False)  # Enable respawn for agents
+        # Fast headless mode: used for MCTS rollouts where we only need coarse
+        # physics & collision, not pixel-accurate rendering.
+        self.fast_mode = config.get('fast_mode', False)
         
         # Handle num_lanes configuration (if provided, build custom lane layout)
         self.num_lanes = config.get('num_lanes', None)
@@ -277,8 +280,8 @@ class IntersectionEnv:
         except:
             pass  # pygame might already be initialized
         
-        # Initialize pygame display if rendering
-        if self.render_mode == 'human':
+        # Initialize pygame display if rendering (disabled in fast_mode)
+        if self.render_mode == 'human' and not self.fast_mode:
             self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
             pygame.display.set_caption(TITLE)
             
@@ -525,8 +528,9 @@ class IntersectionEnv:
         if self.traffic_flow:
             # Single agent mode
             route = self.ego_routes[0] if self.ego_routes else self.default_route
-            agent = Car(route[0], route[1], respawn_enabled=self.respawn_enabled, 
-                       points=self.points, lane_layout=self.lane_layout)
+            agent = Car(route[0], route[1], respawn_enabled=self.respawn_enabled,
+                       points=self.points, lane_layout=self.lane_layout,
+                       graphics_enabled=not self.fast_mode)
             agent.image_orig.fill((255, 0, 0))  # Red for ego
             pygame.draw.rect(agent.image_orig, (200,200,200), 
                            (agent.length*0.7, 2, agent.length*0.25, agent.width-4))
@@ -548,7 +552,8 @@ class IntersectionEnv:
             
             for i, route in enumerate(routes):
                 agent = Car(route[0], route[1], respawn_enabled=self.respawn_enabled,
-                           points=self.points, lane_layout=self.lane_layout)
+                           points=self.points, lane_layout=self.lane_layout,
+                           graphics_enabled=not self.fast_mode)
                 # Different colors for different agents
                 color = COLOR_CAR_LIST[i % len(COLOR_CAR_LIST)]
                 agent.image_orig.fill(color)
@@ -611,22 +616,30 @@ class IntersectionEnv:
             agent_action = actions[i] if i < len(actions) else [0.0, 0.0]
             agent.update(agent_action)
             
-            # Update lidar
-            agent.lidar.update(self.road.collision_mask, all_vehicles)
-            
-            # Check collision
-            if self.traffic_flow:
-                # Single agent: check against traffic
-                obstacles = list(self.traffic_cars)
+            if self.fast_mode:
+                # Fast/headless mode: skip lidar casting & pixel-level masks,
+                # use cheap geometric collision checks instead.
+                if self.traffic_flow:
+                    obstacles = list(self.traffic_cars)
+                else:
+                    obstacles = [a for a in self.agents if a is not agent]
+                collision_info = self._fast_check_collision(agent, obstacles)
             else:
-                # Multi-agent: check against other agents
-                obstacles = [a for a in self.agents if a is not agent]
-            
-            collision_info = agent.check_collision(
-                self.road.collision_mask,
-                self.road.line_mask,
-                obstacles
-            )
+                # Full mode: update lidar and use precise mask-based collision
+                agent.lidar.update(self.road.collision_mask, all_vehicles)
+                
+                if self.traffic_flow:
+                    # Single agent: check against traffic
+                    obstacles = list(self.traffic_cars)
+                else:
+                    # Multi-agent: check against other agents
+                    obstacles = [a for a in self.agents if a is not agent]
+                
+                collision_info = agent.check_collision(
+                    self.road.collision_mask,
+                    self.road.line_mask,
+                    obstacles
+                )
             collision_dict[agent] = collision_info
         
         # Compute rewards
@@ -833,6 +846,52 @@ class IntersectionEnv:
         if car.pos_x < -m or car.pos_x > WIDTH+m or car.pos_y < -m or car.pos_y > HEIGHT+m:
             return True
         return False
+    
+    def _fast_check_collision(self, agent, obstacles):
+        """
+        Cheap geometric collision check for fast/headless mode.
+        
+        - SUCCESS: based on distance to route end.
+        - CRASH_WALL: vehicle corners outside road area (checked via road.collision_mask).
+        - CRASH_CAR: circle-based proximity between vehicle centers.
+        
+        Ignores lane-line collisions to avoid any pixel/Mask ops.
+        """
+        # 1) Success: close enough to target end point
+        if hasattr(agent, 'end_x') and hasattr(agent, 'end_y'):
+            dist_goal = math.hypot(agent.pos_x - agent.end_x, agent.pos_y - agent.end_y)
+            if dist_goal < 20.0:
+                return True, "SUCCESS"
+
+        # 2) Wall / off-road: check vehicle corners against road.collision_mask
+        # road_mask: white (255) = obstacle/grass, black (0) = road
+        road_mask = getattr(self.road, 'collision_mask', None)
+        if road_mask is not None and hasattr(agent, 'get_corners'):
+            w, h = road_mask.get_size()
+            for x, y in agent.get_corners():
+                ix, iy = int(x), int(y)
+                # Out of mask bounds = off-road
+                if ix < 0 or ix >= w or iy < 0 or iy >= h:
+                    return True, "CRASH_WALL"
+                # White pixel in mask = obstacle (grass/wall)
+                if road_mask.get_at((ix, iy)):
+                    return True, "CRASH_WALL"
+        else:
+            # Fallback: simple screen bounds check if mask unavailable
+            margin = 20
+            if (agent.pos_x < -margin or agent.pos_x > WIDTH + margin or
+                    agent.pos_y < -margin or agent.pos_y > HEIGHT + margin):
+                return True, "CRASH_WALL"
+
+        # 3) Vehicle-vehicle: circle approximation using car footprint
+        radius = max(CAR_LENGTH, CAR_WIDTH) * 0.5
+        for other in obstacles:
+            dx = other.pos_x - agent.pos_x
+            dy = other.pos_y - agent.pos_y
+            if dx * dx + dy * dy < (radius * 2) ** 2:
+                return True, "CRASH_CAR"
+
+        return False, "ALIVE"
     
     def _is_arrived(self, car, tol=20):
         """Check if car has arrived at destination."""
