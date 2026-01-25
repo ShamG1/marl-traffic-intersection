@@ -1,0 +1,16 @@
+# Build instructions (Windows / Linux)
+
+```bash
+mkdir build && cd build
+cmake -A x64 ..   # Or simply `cmake ..` on Linux/Mac
+cmake --build . --config Release
+```
+
+The resulting `MARLEnv.*.pyd` (Windows) or `MARLEnv.so` (Unix) will be produced in the `build` directory and can be imported in Python:
+
+```python
+import MARLEnv
+env = MARLEnv.IntersectionEnv()
+car = MARLEnv.Car()
+env.cars.append(car)
+```

@@ -1,25 +1,23 @@
 # MARL 无信号路口环境 🚦
 
-这是一个基于 **Pygame** 开发的轻量级多智能体强化学习 (MARL) 无信号路口仿真环境。
+这是一个基于 **C++ (pybind11) + OpenGL/GLFW** 的轻量级多智能体强化学习 (MARL) 无信号路口仿真环境。
 
 项目实现了基于 **运动学自行车模型** 的车辆控制、**贝塞尔曲线** 导航、**线束激光雷达** 感知以及符合学术标准的 **RL 观测空间**。
 
-![Screenshot](/assets/screenshot.png)
+（截图路径：`cpp/assets/`。如需添加截图，请将图片放到该目录并在此处更新链接。）
 
 ---
 
 ## 📂 文件结构
 
 ### 核心文件
-- `env.py`：RL 环境接口，集成了奖励计算和交通流生成
-- `agent.py`：智能体类，包含物理更新、碰撞检测、RL 状态获取
-- `sensor.py`：激光雷达逻辑
-- `config.py`：全局参数配置（物理、RL 维度、默认奖励配置）
-- `utils.py`：数学工具函数
+- `env.py`：Python 侧环境封装，负责参数配置、调用 C++ 后端、组织 obs/reward/info
+- `cpp_backend.py`：Python ↔ C++ 后端桥接（自动把 `cpp/build/{Release,Debug}` 加入 `sys.path` 并导入 `MARLEnv`）
+- `cpp/`：C++ 后端源码（pybind11 扩展模块 `MARLEnv`），包含仿真、渲染（OpenGL/GLFW）与传感器/交通流逻辑
+- `utils.py`：路线映射与 lane layout 生成等辅助
 
 ### 测试文件
-- `manual_test.py`：手动控制测试（无交通流，显示雷达和路径）
-- `traffic_flow_test.py`：交通流测试（单智能体+NPC，显示车道ID和主车雷达）
+- `test.py`：手动控制测试（键盘控制 + C++ 渲染窗口）
 
 ---
 
@@ -30,21 +28,24 @@
 #### 从源码安装
 
 ```bash
-# 克隆仓库
-git clone https://github.com/ShamG1/marl-traffic-intersection.git
-cd marl-traffic-intersection
+# 进入项目根目录
+cd E:/IMPORTANT_/SCI/train
 
-# 安装包（开发模式，推荐）
-pip install -e .
-
-# 或普通安装
-pip install .
+# 配置并编译 C++ 后端（Windows / MSVC）
+cmake -S cpp -B cpp/build -A x64
+cmake --build cpp/build --config Release
 ```
 
-安装后，可以从任何地方导入：
+编译成功后，可直接运行测试：
+
+```bash
+python test.py
+```
+
+或在代码中使用：
 
 ```python
-from Intersection import IntersectionEnv, DEFAULT_REWARD_CONFIG
+from env import IntersectionEnv, DEFAULT_REWARD_CONFIG
 ```
 
 ### 基本使用
@@ -198,92 +199,11 @@ NPC 车辆使用自主驾驶算法：
 
 ---
 
-## 🎮 运行测试
-
-安装包后，有多种方式运行测试脚本：
-
-### 方法 1：作为 Python 模块运行（推荐）
-
-```bash
-# 手动控制测试（无交通流，显示雷达和路径）
-python -m Intersection.manual_test
-
-# 交通流测试（有 NPC 车辆，显示车道ID和主车雷达）
-python -m Intersection.traffic_test
-```
-
-### 方法 2：直接运行脚本文件
-
-```bash
-# 从项目目录运行
-python Intersection/manual_test.py
-python Intersection/traffic_test.py
-
-# 或使用完整路径（从任何地方）
-python "e:\Intersection\manual_test.py"
-```
-
-### 方法 3：在代码中导入使用
-
-```python
-from Intersection.manual_test import main as manual_test_main
-from Intersection.traffic_test import main as traffic_test_main
-
-# 运行测试
-manual_test_main()  # 手动控制测试
-traffic_test_main()  # 交通流测试
-```
-
-### 测试脚本说明
-
-#### manual_test.py - 手动控制测试
-
-**功能**：
-- 手动控制单个智能体
-- 无交通流（只有你的车辆）
-- 显示雷达和导航路径
-
-**控制方式**：
-- `UP/DOWN` 箭头：油门控制
-- `LEFT/RIGHT` 箭头：转向控制
-- `R` 键：重置环境
-- `ESC/Q` 键：退出程序
-
-**适用场景**：
-- 测试基本车辆控制
-- 验证环境基本功能
-- 调试导航路径
-
-#### traffic_test.py - 交通流测试
-
-**功能**：
-- 手动控制单个智能体
-- 包含 NPC 交通流
-- 显示车道ID、主车雷达和导航路径
-
-**控制方式**：
-- 与 `manual_test.py` 相同
-
-**适用场景**：
-- 测试避障能力
-- 验证交通流交互
-- 测试多车辆场景下的导航
-
-### 注意事项
-
-- 确保已安装包：`pip install -e .`
-- 确保在正确的 conda 环境中运行
-- 窗口会保持打开，按 `ESC` 或 `Q` 退出
-
----
-
 ## 📝 TODO
 
 - [x] 集成奖励计算到环境
 - [x] 集成交通流生成到环境
 - [x] 支持单智能体和多智能体模式
-- [x] 使用 MAPPO 算法训练
-- [x] 使用 MCTS 算法训练
 - [ ] 支持多地图测试
 
 ---
